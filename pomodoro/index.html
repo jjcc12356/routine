@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#141228" />
+  <meta name="color-scheme" content="dark" />
+  <title>Glass Pomodoro · 番茄专注钟</title>
+
+  <!-- Tailwind CSS v4 Browser CDN：无需 npm / 构建链 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
+  <!--
+    Tailwind v4 CSS-first 配置：
+    - @theme 负责设计令牌与 Tailwind utility 映射
+    - @utility 注册可复用的毛玻璃/硬件加速工具类
+  -->
+  <style type="text/tailwindcss">
+    @theme {
+      --font-sans: ui-rounded, "SF Pro Rounded", "SF Pro Display", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --color-ink-950: #0c0a1a;
+      --color-ink-900: #141228;
+      --color-mist-50: #f8f7ff;
+      --color-violet-glow: #8b5cf6;
+      --color-cyan-glow: #22d3ee;
+      --color-rose-glow: #fb7185;
+      --color-amber-glow: #fbbf24;
+      --shadow-glass: 0 24px 80px rgba(8, 6, 24, .34), inset 0 1px 0 rgba(255, 255, 255, .28), inset 0 -1px 0 rgba(255, 255, 255, .08);
+      --radius-glass: 2rem;
+      --ease-fluid: cubic-bezier(.2,.8,.2,1);
+    }
+
+    @utility gpu-layer {
+      transform: translate3d(0, 0, 0);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+      will-change: transform;
+    }
+
+    @utility glass-panel {
+      background: linear-gradient(145deg, rgba(255,255,255,.16), rgba(255,255,255,.055));
+      border: 1px solid rgba(255,255,255,.18);
+      box-shadow: 0 24px 80px rgba(8, 6, 24, .34), inset 0 1px 0 rgba(255,255,255,.28), inset 0 -1px 0 rgba(255,255,255,.08);
+      -webkit-backdrop-filter: blur(24px) saturate(145%);
+      backdrop-filter: blur(24px) saturate(145%);
+      transform: translate3d(0,0,0);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+    }
+
+    @utility glass-soft {
+      background: rgba(255,255,255,.075);
+      border: 1px solid rgba(255,255,255,.11);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 12px 32px rgba(5,4,20,.16);
+      -webkit-backdrop-filter: blur(16px) saturate(125%);
+      backdrop-filter: blur(16px) saturate(125%);
+      transform: translate3d(0,0,0);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+    }
+
+    @utility tap-surface {
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      user-select: none;
+    }
+  </style>
+
+  <style>
+    :root {
+      --progress: 0;
+      --ring-color: rgba(255,255,255,.96);
+      --safe-top: max(18px, env(safe-area-inset-top));
+      --safe-right: max(18px, env(safe-area-inset-right));
+      --safe-bottom: max(18px, env(safe-area-inset-bottom));
+      --safe-left: max(18px, env(safe-area-inset-left));
+    }
+
+    * { box-sizing: border-box; }
+    html { background: #0c0a1a; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      overflow-x: hidden;
+      overscroll-behavior-y: none;
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    .app-shell {
+      padding-top: var(--safe-top);
+      padding-right: var(--safe-right);
+      padding-bottom: var(--safe-bottom);
+      padding-left: var(--safe-left);
+      isolation: isolate;
+    }
+
+    /* 流体渐变背景：仅动画 transform，尽量避免持续触发布局与重绘 */
+    .ambient {
+      position: fixed;
+      inset: -18%;
+      z-index: -3;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 20% 20%, rgba(112, 54, 255, .58), transparent 34%),
+        radial-gradient(circle at 86% 18%, rgba(0, 209, 255, .38), transparent 34%),
+        radial-gradient(circle at 78% 82%, rgba(255, 65, 137, .42), transparent 34%),
+        radial-gradient(circle at 20% 84%, rgba(255, 177, 64, .22), transparent 32%),
+        linear-gradient(145deg, #0a0717 0%, #17102f 48%, #071827 100%);
+      transform: translate3d(0,0,0);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+    }
+
+    .blob {
+      position: absolute;
+      width: 58vmax;
+      aspect-ratio: 1;
+      border-radius: 999px;
+      opacity: .42;
+      filter: blur(52px);
+      transform: translate3d(0,0,0);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+      will-change: transform;
+      pointer-events: none;
+    }
+
+    .blob-a {
+      left: -18%; top: -16%;
+      background: radial-gradient(circle at 35% 35%, #bca7ff 0, #6d42ff 34%, transparent 68%);
+      animation: drift-a 18s var(--ease-fluid) infinite alternate;
+    }
+    .blob-b {
+      right: -20%; top: 12%;
+      background: radial-gradient(circle at 45% 40%, #8ff2ff 0, #16b7df 32%, transparent 68%);
+      animation: drift-b 22s var(--ease-fluid) infinite alternate;
+    }
+    .blob-c {
+      left: 18%; bottom: -34%;
+      background: radial-gradient(circle at 50% 45%, #ff9aba 0, #f24683 34%, transparent 67%);
+      animation: drift-c 20s var(--ease-fluid) infinite alternate;
+    }
+
+    @keyframes drift-a {
+      to { transform: translate3d(16%, 18%, 0) scale(1.08) rotate(8deg); }
+    }
+    @keyframes drift-b {
+      to { transform: translate3d(-14%, 18%, 0) scale(.92) rotate(-12deg); }
+    }
+    @keyframes drift-c {
+      to { transform: translate3d(12%, -20%, 0) scale(1.12) rotate(10deg); }
+    }
+
+    .noise {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      opacity: .09;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.38'/%3E%3C/svg%3E");
+      mix-blend-mode: soft-light;
+    }
+
+    .timer-ring {
+      filter: drop-shadow(0 0 26px rgba(255,255,255,.13));
+    }
+
+    .timer-ring__progress {
+      stroke-dasharray: 100;
+      stroke-dashoffset: calc(100 - var(--progress));
+      transition: stroke-dashoffset .28s linear, stroke .35s ease;
+      transform: translate3d(0,0,0) rotate(-90deg);
+      transform-origin: 50% 50%;
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+    }
+
+    .mode-pill[aria-selected="true"] {
+      background: rgba(255,255,255,.18);
+      color: white;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 8px 24px rgba(6,5,18,.16);
+    }
+
+    .mode-pill[aria-selected="false"] { color: rgba(255,255,255,.62); }
+
+    .primary-action {
+      position: relative;
+      overflow: hidden;
+      transform: translate3d(0,0,0);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+      transition: transform .18s var(--ease-fluid), box-shadow .18s ease, background .18s ease;
+    }
+    .primary-action::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      border-radius: inherit;
+      background: linear-gradient(135deg, rgba(255,255,255,.34), transparent 34%, rgba(255,255,255,.07));
+      opacity: .6;
+      pointer-events: none;
+    }
+    .primary-action:active { transform: translate3d(0,2px,0) scale(.985); }
+
+    .icon-btn { transition: transform .16s var(--ease-fluid), background-color .2s ease; }
+    .icon-btn:active { transform: translate3d(0,1px,0) scale(.94); }
+
+    .modal-backdrop {
+      background: rgba(7, 5, 20, .54);
+      -webkit-backdrop-filter: blur(18px);
+      backdrop-filter: blur(18px);
+      transform: translate3d(0,0,0);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+    }
+
+    .modal-panel {
+      transform: translate3d(0,0,0);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+      animation: modal-in .24s var(--ease-fluid) both;
+    }
+    @keyframes modal-in {
+      from { opacity: 0; transform: translate3d(0,18px,0) scale(.98); }
+      to { opacity: 1; transform: translate3d(0,0,0) scale(1); }
+    }
+
+    .settings-input {
+      appearance: none;
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.12);
+      color: white;
+      outline: none;
+    }
+    .settings-input:focus { border-color: rgba(255,255,255,.38); box-shadow: 0 0 0 3px rgba(255,255,255,.08); }
+
+    .toast {
+      animation: toast-in .25s var(--ease-fluid) both;
+      transform: translate3d(0,0,0);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+    }
+    @keyframes toast-in {
+      from { opacity: 0; transform: translate3d(0,-8px,0) scale(.98); }
+      to { opacity: 1; transform: translate3d(0,0,0) scale(1); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: .001ms !important;
+      }
+    }
+  </style>
+</head>
+
+<body class="min-h-[100svh] bg-ink-950 text-white selection:bg-white/20">
+  <div class="ambient" aria-hidden="true">
+    <div class="blob blob-a"></div>
+    <div class="blob blob-b"></div>
+    <div class="blob blob-c"></div>
+  </div>
+  <div class="noise" aria-hidden="true"></div>
+
+  <main class="app-shell min-h-[100svh] flex items-center justify-center">
+    <section class="w-full max-w-[430px] mx-auto">
+      <header class="mb-4 flex items-center justify-between px-1">
+        <div>
+          <p class="text-[11px] font-semibold tracking-[.22em] text-white/45 uppercase">Deep focus</p>
+          <h1 class="mt-1 text-xl font-semibold tracking-[-.03em]">番茄专注钟</h1>
+        </div>
+        <button id="settingsBtn" class="icon-btn tap-surface glass-soft size-11 rounded-2xl grid place-items-center text-white/85" aria-label="打开设置">
+          <svg viewBox="0 0 24 24" class="size-5" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06-1.87 1.87-.06-.06A1.7 1.7 0 0 0 16 18.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V20h-2.6v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.87.34l-.06.06-1.87-1.87.06-.06A1.7 1.7 0 0 0 7.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H5.8V11h.1A1.7 1.7 0 0 0 7.5 9.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06L8.97 6.1l.06.06A1.7 1.7 0 0 0 10.9 6.5a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1v-.1h2.6v.1A1.7 1.7 0 0 0 16 6.4a1.7 1.7 0 0 0 1.87-.34l.06-.06 1.87 1.87-.06.06A1.7 1.7 0 0 0 19.4 9.8c.2.39.55.73 1 .94.35.18.73.27 1.12.26h.08v2.6h-.1a1.7 1.7 0 0 0-1.6 1.1c-.16.1-.33.2-.5.3Z"/>
+          </svg>
+        </button>
+      </header>
+
+      <div class="glass-panel rounded-[2rem] p-4 sm:p-5">
+        <div class="glass-soft rounded-2xl p-1.5 grid grid-cols-3 gap-1" role="tablist" aria-label="计时模式">
+          <button class="mode-pill tap-surface rounded-xl px-2 py-2.5 text-xs font-semibold transition" data-mode="focus" role="tab" aria-selected="true">专注</button>
+          <button class="mode-pill tap-surface rounded-xl px-2 py-2.5 text-xs font-semibold transition" data-mode="short" role="tab" aria-selected="false">短休息</button>
+          <button class="mode-pill tap-surface rounded-xl px-2 py-2.5 text-xs font-semibold transition" data-mode="long" role="tab" aria-selected="false">长休息</button>
+        </div>
+
+        <div class="relative mt-5 grid place-items-center py-2">
+          <div class="relative w-[min(73vw,300px)] max-w-[300px] aspect-square">
+            <svg viewBox="0 0 120 120" class="timer-ring absolute inset-0 size-full" aria-hidden="true">
+              <circle cx="60" cy="60" r="51" fill="none" stroke="rgba(255,255,255,.075)" stroke-width="3.5" pathLength="100" />
+              <circle id="progressRing" class="timer-ring__progress" cx="60" cy="60" r="51" fill="none" stroke="var(--ring-color)" stroke-linecap="round" stroke-width="3.5" pathLength="100" />
+            </svg>
+
+            <div class="absolute inset-[9.5%] glass-soft rounded-full grid place-items-center text-center">
+              <div class="px-5">
+                <div id="modeLabel" class="text-xs font-semibold tracking-[.2em] uppercase text-white/48">Focus</div>
+                <div id="timeDisplay" class="mt-1 font-mono text-[clamp(3.25rem,15vw,5rem)] leading-none font-semibold tracking-[-.08em] tabular-nums">25:00</div>
+                <div id="statusLine" class="mt-3 text-xs font-medium text-white/52">准备好开始一段专注</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-3 flex items-center justify-center gap-3">
+          <button id="resetBtn" class="icon-btn tap-surface glass-soft size-12 rounded-2xl grid place-items-center text-white/78" aria-label="重置当前计时">
+            <svg viewBox="0 0 24 24" class="size-5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+          </button>
+
+          <button id="startBtn" class="primary-action tap-surface min-w-[156px] rounded-[1.35rem] bg-white px-7 py-4 text-sm font-bold text-ink-950 shadow-[0_16px_36px_rgba(255,255,255,.18)]" aria-pressed="false">
+            <span id="startText" class="relative z-10 inline-flex items-center gap-2">
+              <svg id="playIcon" viewBox="0 0 24 24" class="size-4" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+              <svg id="pauseIcon" viewBox="0 0 24 24" class="size-4 hidden" fill="currentColor" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
+              <span id="startLabel">开始专注</span>
+            </span>
+          </button>
+
+          <button id="skipBtn" class="icon-btn tap-surface glass-soft size-12 rounded-2xl grid place-items-center text-white/78" aria-label="跳过当前阶段">
+            <svg viewBox="0 0 24 24" class="size-5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 6 9 6-9 6V6Z"/><path d="M18 6v12"/></svg>
+          </button>
+        </div>
+
+        <div class="mt-5 grid grid-cols-3 gap-2.5">
+          <div class="glass-soft rounded-2xl px-3 py-3.5 text-center">
+            <p class="text-[10px] tracking-[.16em] uppercase text-white/38">今日专注</p>
+            <p id="todayFocus" class="mt-1.5 text-lg font-semibold tabular-nums">0</p>
+          </div>
+          <div class="glass-soft rounded-2xl px-3 py-3.5 text-center">
+            <p class="text-[10px] tracking-[.16em] uppercase text-white/38">本轮</p>
+            <p id="roundCounter" class="mt-1.5 text-lg font-semibold tabular-nums">0 / 4</p>
+          </div>
+          <div class="glass-soft rounded-2xl px-3 py-3.5 text-center">
+            <p class="text-[10px] tracking-[.16em] uppercase text-white/38">累计分钟</p>
+            <p id="todayMinutes" class="mt-1.5 text-lg font-semibold tabular-nums">0</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-3 px-2 flex items-center justify-between text-[11px] text-white/38">
+        <span>空格 开始/暂停 · R 重置 · S 跳过</span>
+        <span id="clockText" class="tabular-nums"></span>
+      </div>
+    </section>
+  </main>
+
+  <!-- 设置弹窗 -->
+  <div id="settingsModal" class="modal-backdrop fixed inset-0 z-50 hidden items-end sm:items-center justify-center p-3 sm:p-5" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="modal-panel glass-panel w-full max-w-[420px] rounded-[2rem] p-5 sm:p-6">
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-[10px] tracking-[.2em] uppercase text-white/38">Preferences</p>
+          <h2 id="settingsTitle" class="mt-1 text-xl font-semibold">计时设置</h2>
+        </div>
+        <button id="closeSettingsBtn" class="icon-btn tap-surface glass-soft size-10 rounded-xl grid place-items-center" aria-label="关闭设置">
+          <svg viewBox="0 0 24 24" class="size-5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+
+      <div class="mt-5 grid grid-cols-3 gap-2.5">
+        <label class="text-xs text-white/55">专注
+          <input id="focusInput" class="settings-input mt-2 w-full rounded-xl px-3 py-2.5 text-sm" type="number" inputmode="numeric" min="1" max="120" value="25" aria-label="专注分钟" />
+        </label>
+        <label class="text-xs text-white/55">短休息
+          <input id="shortInput" class="settings-input mt-2 w-full rounded-xl px-3 py-2.5 text-sm" type="number" inputmode="numeric" min="1" max="60" value="5" aria-label="短休息分钟" />
+        </label>
+        <label class="text-xs text-white/55">长休息
+          <input id="longInput" class="settings-input mt-2 w-full rounded-xl px-3 py-2.5 text-sm" type="number" inputmode="numeric" min="1" max="90" value="15" aria-label="长休息分钟" />
+        </label>
+      </div>
+
+      <div class="mt-4 space-y-2.5">
+        <label class="glass-soft rounded-2xl px-4 py-3.5 flex items-center justify-between gap-4 cursor-pointer">
+          <div><div class="text-sm font-medium">完成提示音</div><div class="mt-0.5 text-[11px] text-white/40">使用 Web Audio API，本地生成提示音</div></div>
+          <input id="soundToggle" type="checkbox" class="size-4 accent-white" checked />
+        </label>
+        <label class="glass-soft rounded-2xl px-4 py-3.5 flex items-center justify-between gap-4 cursor-pointer">
+          <div><div class="text-sm font-medium">轻触震动</div><div class="mt-0.5 text-[11px] text-white/40">设备支持时在完成阶段振动</div></div>
+          <input id="vibrationToggle" type="checkbox" class="size-4 accent-white" checked />
+        </label>
+      </div>
+
+      <div class="mt-5 grid grid-cols-2 gap-2.5">
+        <button id="restoreDefaultsBtn" class="tap-surface glass-soft rounded-2xl py-3 text-sm font-semibold text-white/70">恢复默认</button>
+        <button id="saveSettingsBtn" class="tap-surface rounded-2xl bg-white py-3 text-sm font-bold text-ink-950">保存设置</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast glass-panel fixed top-[max(16px,env(safe-area-inset-top))] left-1/2 z-[60] hidden -translate-x-1/2 rounded-2xl px-4 py-2.5 text-xs font-medium text-white/90" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const STORAGE_KEY = 'glass-pomodoro-v1';
+      const DEFAULTS = Object.freeze({ focus: 25, short: 5, long: 15, sound: true, vibration: true });
+      const modeMeta = {
+        focus: { label: 'Focus', cta: '开始专注', ring: 'rgba(255,255,255,.96)' },
+        short: { label: 'Short break', cta: '开始休息', ring: 'rgba(143,242,255,.98)' },
+        long: { label: 'Long break', cta: '开始休息', ring: 'rgba(255,191,105,.98)' }
+      };
+
+      const $ = (id) => document.getElementById(id);
+      const els = {
+        time: $('timeDisplay'), modeLabel: $('modeLabel'), status: $('statusLine'),
+        start: $('startBtn'), startLabel: $('startLabel'), play: $('playIcon'), pause: $('pauseIcon'),
+        reset: $('resetBtn'), skip: $('skipBtn'), settings: $('settingsBtn'),
+        modal: $('settingsModal'), closeSettings: $('closeSettingsBtn'), saveSettings: $('saveSettingsBtn'),
+        restore: $('restoreDefaultsBtn'), focusInput: $('focusInput'), shortInput: $('shortInput'), longInput: $('longInput'),
+        soundToggle: $('soundToggle'), vibrationToggle: $('vibrationToggle'),
+        todayFocus: $('todayFocus'), roundCounter: $('roundCounter'), todayMinutes: $('todayMinutes'),
+        clock: $('clockText'), toast: $('toast')
+      };
+
+      const todayKey = () => new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+
+      const initial = {
+        settings: { ...DEFAULTS },
+        mode: 'focus',
+        remaining: DEFAULTS.focus * 60,
+        duration: DEFAULTS.focus * 60,
+        running: false,
+        deadline: 0,
+        rounds: 0,
+        stats: { date: todayKey(), focusCount: 0, focusMinutes: 0 }
+      };
+
+      let state = loadState();
+      let ticker = null;
+      let audioCtx = null;
+      let toastTimer = null;
+
+      function loadState() {
+        try {
+          const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+          if (!saved) return structuredClone(initial);
+          const merged = {
+            ...structuredClone(initial),
+            ...saved,
+            settings: { ...DEFAULTS, ...(saved.settings || {}) },
+            stats: { ...initial.stats, ...(saved.stats || {}) }
+          };
+          if (merged.stats.date !== todayKey()) merged.stats = { date: todayKey(), focusCount: 0, focusMinutes: 0 };
+          if (!['focus','short','long'].includes(merged.mode)) merged.mode = 'focus';
+          if (merged.running && merged.deadline) merged.remaining = Math.max(0, Math.ceil((merged.deadline - Date.now()) / 1000));
+          return merged;
+        } catch (_) {
+          return structuredClone(initial);
+        }
+      }
+
+      function persist() {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (_) {}
+      }
+
+      function modeSeconds(mode = state.mode) { return Math.max(60, Number(state.settings[mode] || DEFAULTS[mode]) * 60); }
+      function clampInt(value, min, max, fallback) {
+        const n = Math.round(Number(value));
+        return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+      }
+
+      function formatTime(totalSeconds) {
+        const s = Math.max(0, Math.ceil(totalSeconds));
+        const m = Math.floor(s / 60);
+        return `${String(m).padStart(2,'0')}:${String(s % 60).padStart(2,'0')}`;
+      }
+
+      function render() {
+        const meta = modeMeta[state.mode];
+        const progress = state.duration > 0 ? ((state.duration - state.remaining) / state.duration) * 100 : 0;
+        document.documentElement.style.setProperty('--progress', String(Math.max(0, Math.min(100, progress))));
+        document.documentElement.style.setProperty('--ring-color', meta.ring);
+        els.time.textContent = formatTime(state.remaining);
+        els.modeLabel.textContent = meta.label;
+        els.start.setAttribute('aria-pressed', String(state.running));
+        els.play.classList.toggle('hidden', state.running);
+        els.pause.classList.toggle('hidden', !state.running);
+        els.startLabel.textContent = state.running ? '暂停' : meta.cta;
+        els.status.textContent = state.running ? (state.mode === 'focus' ? '保持节奏，只做眼前这一件事' : '放松一下，让注意力恢复') : (state.remaining < state.duration ? '已暂停，可随时继续' : (state.mode === 'focus' ? '准备好开始一段专注' : '给大脑一点恢复时间'));
+        els.todayFocus.textContent = state.stats.focusCount;
+        els.todayMinutes.textContent = state.stats.focusMinutes;
+        els.roundCounter.textContent = `${state.rounds % 4} / 4`;
+        document.querySelectorAll('[data-mode]').forEach(btn => btn.setAttribute('aria-selected', String(btn.dataset.mode === state.mode)));
+        document.title = `${formatTime(state.remaining)} · ${state.mode === 'focus' ? '专注' : '休息'} · Glass Pomodoro`;
+      }
+
+      function startTicker() {
+        stopTicker();
+        ticker = window.setInterval(tick, 250);
+        tick();
+      }
+
+      function stopTicker() {
+        if (ticker) window.clearInterval(ticker);
+        ticker = null;
+      }
+
+      function tick() {
+        if (!state.running) return;
+        const next = Math.max(0, Math.ceil((state.deadline - Date.now()) / 1000));
+        if (next !== state.remaining) {
+          state.remaining = next;
+          render();
+        }
+        if (next <= 0) completePhase();
+      }
+
+      function toggleTimer() {
+        if (state.running) pauseTimer(); else startTimer();
+      }
+
+      function startTimer() {
+        if (state.remaining <= 0) resetCurrent();
+        state.running = true;
+        state.deadline = Date.now() + state.remaining * 1000;
+        persist(); render(); startTicker();
+      }
+
+      function pauseTimer() {
+        if (!state.running) return;
+        state.remaining = Math.max(0, Math.ceil((state.deadline - Date.now()) / 1000));
+        state.running = false;
+        state.deadline = 0;
+        stopTicker(); persist(); render();
+      }
+
+      function resetCurrent() {
+        state.running = false;
+        state.deadline = 0;
+        state.duration = modeSeconds();
+        state.remaining = state.duration;
+        stopTicker(); persist(); render();
+      }
+
+      function setMode(mode, { autoStart = false } = {}) {
+        if (!modeMeta[mode]) return;
+        state.mode = mode;
+        state.running = false;
+        state.deadline = 0;
+        state.duration = modeSeconds(mode);
+        state.remaining = state.duration;
+        stopTicker(); persist(); render();
+        if (autoStart) startTimer();
+      }
+
+      function skipPhase() {
+        const wasFocus = state.mode === 'focus';
+        if (wasFocus) {
+          state.rounds += 1;
+          const nextMode = state.rounds % 4 === 0 ? 'long' : 'short';
+          showToast(nextMode === 'long' ? '进入长休息' : '进入短休息');
+          setMode(nextMode);
+        } else {
+          showToast('返回专注模式');
+          setMode('focus');
+        }
+      }
+
+      function completePhase() {
+        const completedMode = state.mode;
+        state.running = false;
+        state.deadline = 0;
+        stopTicker();
+
+        if (completedMode === 'focus') {
+          state.stats.focusCount += 1;
+          state.stats.focusMinutes += state.settings.focus;
+          state.rounds += 1;
+        }
+
+        persist();
+        notifyCompletion(completedMode);
+        if (completedMode === 'focus') {
+          const next = state.rounds % 4 === 0 ? 'long' : 'short';
+          setMode(next);
+          showToast(next === 'long' ? '完成 4 轮，享受长休息' : '专注完成，休息一下');
+        } else {
+          setMode('focus');
+          showToast('休息结束，回到专注');
+        }
+      }
+
+      // iOS 音频解锁：resume() 紧贴首次用户 click/touchstart 的同步回调执行。
+      function unlockAudio() {
+        try {
+          if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          if (audioCtx.state === 'suspended') audioCtx.resume();
+        } catch (_) {}
+      }
+
+      function playChime() {
+        if (!state.settings.sound || !audioCtx) return;
+        try {
+          const now = audioCtx.currentTime;
+          [523.25, 659.25, 783.99].forEach((freq, i) => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now + i * .13);
+            gain.gain.setValueAtTime(0.0001, now + i * .13);
+            gain.gain.exponentialRampToValueAtTime(.16, now + i * .13 + .02);
+            gain.gain.exponentialRampToValueAtTime(.0001, now + i * .13 + .25);
+            osc.connect(gain).connect(audioCtx.destination);
+            osc.start(now + i * .13);
+            osc.stop(now + i * .13 + .28);
+          });
+        } catch (_) {}
+      }
+
+      function notifyCompletion(mode) {
+        playChime();
+        if (state.settings.vibration && 'vibrate' in navigator) navigator.vibrate([70, 55, 110]);
+        if ('Notification' in window && Notification.permission === 'granted') {
+          try { new Notification(mode === 'focus' ? '专注完成' : '休息结束', { body: mode === 'focus' ? '做得不错，现在休息一下。' : '准备开始下一轮专注。' }); } catch (_) {}
+        }
+      }
+
+      function showToast(message) {
+        window.clearTimeout(toastTimer);
+        els.toast.textContent = message;
+        els.toast.classList.remove('hidden');
+        toastTimer = window.setTimeout(() => els.toast.classList.add('hidden'), 2200);
+      }
+
+      function openSettings() {
+        els.focusInput.value = state.settings.focus;
+        els.shortInput.value = state.settings.short;
+        els.longInput.value = state.settings.long;
+        els.soundToggle.checked = state.settings.sound;
+        els.vibrationToggle.checked = state.settings.vibration;
+        els.modal.classList.remove('hidden');
+        els.modal.classList.add('flex');
+        requestAnimationFrame(() => els.focusInput.focus({ preventScroll: true }));
+      }
+
+      function closeSettings() {
+        els.modal.classList.add('hidden');
+        els.modal.classList.remove('flex');
+        els.settings.focus({ preventScroll: true });
+      }
+
+      function saveSettings() {
+        state.settings = {
+          focus: clampInt(els.focusInput.value, 1, 120, DEFAULTS.focus),
+          short: clampInt(els.shortInput.value, 1, 60, DEFAULTS.short),
+          long: clampInt(els.longInput.value, 1, 90, DEFAULTS.long),
+          sound: els.soundToggle.checked,
+          vibration: els.vibrationToggle.checked
+        };
+        if (!state.running) {
+          state.duration = modeSeconds();
+          state.remaining = state.duration;
+        }
+        persist(); render(); closeSettings(); showToast('设置已保存');
+      }
+
+      function restoreDefaults() {
+        els.focusInput.value = DEFAULTS.focus;
+        els.shortInput.value = DEFAULTS.short;
+        els.longInput.value = DEFAULTS.long;
+        els.soundToggle.checked = DEFAULTS.sound;
+        els.vibrationToggle.checked = DEFAULTS.vibration;
+        showToast('已填入默认值，点击保存生效');
+      }
+
+      function refreshClock() {
+        els.clock.textContent = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+      }
+
+      document.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
+      els.start.addEventListener('click', toggleTimer);
+      els.reset.addEventListener('click', resetCurrent);
+      els.skip.addEventListener('click', skipPhase);
+      els.settings.addEventListener('click', openSettings);
+      els.closeSettings.addEventListener('click', closeSettings);
+      els.saveSettings.addEventListener('click', saveSettings);
+      els.restore.addEventListener('click', restoreDefaults);
+      els.modal.addEventListener('click', (e) => { if (e.target === els.modal) closeSettings(); });
+
+      // 零延迟事件捕获：所有 touchstart 均显式 passive:true。
+      document.addEventListener('touchstart', unlockAudio, { passive: true, once: true, capture: true });
+      document.addEventListener('click', unlockAudio, { once: true, capture: true });
+      document.addEventListener('touchstart', () => {}, { passive: true });
+
+      document.addEventListener('keydown', (e) => {
+        if (!els.modal.classList.contains('hidden')) {
+          if (e.key === 'Escape') closeSettings();
+          return;
+        }
+        const tag = e.target && e.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        if (e.code === 'Space') { e.preventDefault(); toggleTimer(); }
+        if (e.key.toLowerCase() === 'r') resetCurrent();
+        if (e.key.toLowerCase() === 's') skipPhase();
+      });
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && state.running) tick();
+        persist();
+      });
+      window.addEventListener('pagehide', persist);
+
+      // 恢复后台/刷新前仍在运行的绝对时间轴。
+      if (state.running) {
+        if (state.remaining <= 0) completePhase();
+        else startTicker();
+      }
+
+      render();
+      refreshClock();
+      window.setInterval(refreshClock, 15000);
+    })();
+  </script>
+</body>
+</html>
